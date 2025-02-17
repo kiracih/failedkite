@@ -61,3 +61,52 @@ class NotificationService:
             return buildkite_message, 200
         else:
             return "Failed to send Slack message.", 500
+
+    def notify_pr(self, pr_data):
+        """
+        Handle notifications for Pull Request events
+        
+        Args:
+            pr_data (dict): Pull request data containing information like title, 
+                           url, author, and state
+        
+        Returns:
+            tuple: (message, status_code)
+        """
+        pr_url = pr_data.get('html_url')
+        pr_title = pr_data.get('title')
+        pr_state = pr_data.get('state')
+        pr_author = pr_data.get('user', {}).get('login')
+
+        if not all([pr_url, pr_title, pr_state, pr_author]):
+            error_msg = f"Missing required PR data. URL={pr_url}, Title={pr_title}, State={pr_state}, Author={pr_author}"
+            self.logger.error(error_msg)
+            return error_msg, 400
+
+        # Check if author should be ignored
+        ignore_users: list[str] | None = self.config.ignore_users
+        if ignore_users and pr_author in ignore_users:
+            ignore_msg = f"The username={pr_author} was ignored for PR: {pr_url}"
+            return ignore_msg, 200
+
+        # Get Slack email for the PR author
+        slack_email = self.config.author_mapping.get(pr_author)
+        if not slack_email:
+            author_msg = f"No user was found in the author mapping with the username={pr_author} for PR: {pr_url}"
+            self.slack_client.send_message(author_msg, self.default_user_id)
+            return author_msg, 500
+
+        # Get Slack user ID
+        user_id = self.slack_client.get_user_id_by_email(slack_email)
+        if not user_id:
+            user_msg = f"Failed to fetch user ID from Slack for email={slack_email} for PR: {pr_url}"
+            return user_msg, 500
+
+        # Construct and send notification message
+        pr_message = f"Your PR '{pr_title}' is {pr_state}. URL: {pr_url}"
+        status = self.slack_client.send_message(pr_message, user_id)
+        
+        if status:
+            return pr_message, 200
+        else:
+            return "Failed to send Slack message.", 500
